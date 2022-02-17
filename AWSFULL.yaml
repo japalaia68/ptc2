@@ -1,0 +1,219 @@
+Resources:
+      PubPrivateVPC:
+        Type: 'AWS::EC2::VPC'
+        Properties:
+          CidrBlock: 192.168.0.0/16
+          Tags:
+            - Key: Name
+              Value: PTC
+      PublicSubnet1:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone: us-east-1a
+          CidrBlock: 192.168.1.0/24
+          MapPublicIpOnLaunch: true
+          Tags:
+            - Key: Name
+              Value: PTC-PublicSubnet1
+     
+      PublicSubnet2:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone: us-east-1b
+          CidrBlock: 192.168.2.0/24
+          MapPublicIpOnLaunch: true
+          Tags:
+            - Key: Name
+              Value: PTC-PublicSubnet2
+              
+      PrivateSubnet1:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone: us-east-1a
+          CidrBlock: 192.168.3.0/24
+          MapPublicIpOnLaunch: false
+          Tags:
+            - Key: Name
+              Value: PTC-PrivateSubnet1
+              
+      PrivateSubnet2:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone: us-east-1b
+          CidrBlock: 192.168.4.0/24
+          MapPublicIpOnLaunch: false
+          Tags:
+            - Key: Name
+              Value: PTC-PrivateSubnet2
+      
+      InternetGateway:
+        Type: 'AWS::EC2::InternetGateway'
+        Properties:
+          Tags:
+            - Key: Name
+              Value:  !Join ['', [!Ref "AWS::StackName", "-INTGW" ]]
+            - Key: Network
+              Value: Public
+      
+      GatewayToInternet:
+        Type: 'AWS::EC2::VPCGatewayAttachment'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          InternetGatewayId: !Ref InternetGateway
+      
+      PublicRouteTable:
+        Type: 'AWS::EC2::RouteTable'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          Tags:
+            - Key: Network
+              Value: Public
+      
+      PublicRoute:
+        Type: 'AWS::EC2::Route'
+        DependsOn: GatewayToInternet
+        Properties:
+          RouteTableId: !Ref PublicRouteTable
+          DestinationCidrBlock: 0.0.0.0/0
+          GatewayId: !Ref InternetGateway
+     
+      PublicSubnet1RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PublicSubnet1
+          RouteTableId: !Ref PublicRouteTable
+     
+      PublicSubnet2RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PublicSubnet2
+          RouteTableId: !Ref PublicRouteTable
+     
+      NatGateway:
+        Type: "AWS::EC2::NatGateway"
+        DependsOn: NatPublicIP
+        Properties: 
+          AllocationId: !GetAtt NatPublicIP.AllocationId
+          SubnetId: !Ref PublicSubnet1
+          Tags:
+            - Key: Name
+              Value:  !Join ['', [!Ref "AWS::StackName", "-NATGW" ]]
+      NatPublicIP:
+        Type: "AWS::EC2::EIP"
+        DependsOn: PubPrivateVPC
+        Properties:
+          Domain: vpc
+     
+      PrivateRouteTable:
+        Type: 'AWS::EC2::RouteTable'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          Tags:
+            - Key: Network
+              Value: Private
+      
+      PrivateRoute:
+        Type: 'AWS::EC2::Route'
+        Properties:
+          RouteTableId: !Ref PrivateRouteTable
+          DestinationCidrBlock: 0.0.0.0/0
+          NatGatewayId: !Ref NatGateway
+     
+      PrivateSubnet1RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PrivateSubnet1
+          RouteTableId: !Ref PrivateRouteTable
+     
+      PrivateSubnet2RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PrivateSubnet2
+          RouteTableId: !Ref PrivateRouteTable
+          
+      eksSecurityGroup:
+         Type: AWS::EC2::SecurityGroup
+         Properties:
+           GroupDescription: Cluster communication with worker nodes
+           VpcId: !Ref PubPrivateVPC
+           Tags:
+             - Key: Name
+               Value: !Sub "${AWS::StackName}-SecurityGroup"
+             - Key: Project
+               Value: aws-eks    
+      
+      eksClusterRole:
+        Type: AWS::IAM::Role
+        Properties:
+          AssumeRolePolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Principal:
+                  Service:
+                  - eks.amazonaws.com
+                Action:
+                - sts:AssumeRole
+          RoleName: EKSROLE       
+          ManagedPolicyArns:
+            - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy          
+          
+      EKSCluster:
+          Type: AWS::EKS::Cluster
+          Properties:
+            Name: EKSPTC
+            Version: "1.20"
+            RoleArn: 
+              "Fn::GetAtt": ["eksClusterRole", "Arn"]
+            ResourcesVpcConfig:
+              SecurityGroupIds:
+                - !Ref eksSecurityGroup
+              SubnetIds:
+                - !Ref PrivateSubnet1
+                - !Ref PrivateSubnet2
+              EndpointPublicAccess: false
+              EndpointPrivateAccess: true
+            Tags:
+              - Key: "key"
+                Value: "val"
+      
+      eksNodeRole:
+          Type: AWS::IAM::Role
+          Properties:
+            AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Principal:
+                    Service:
+                    - ec2.amazonaws.com
+                  Action:
+                  - sts:AssumeRole
+            RoleName: EKSNODEROLE       
+            ManagedPolicyArns:
+              - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+              - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+              - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy              
+      
+      eksNodeGroup:
+        Type: AWS::EKS::Nodegroup
+        Properties:
+          NodeRole: 
+            "Fn::GetAtt": ["eksNodeRole", "Arn"]
+          ClusterName: EKSPTC
+          InstanceTypes: 
+            - t3a.large
+          NodegroupName: PTCNODEGROUP
+          ScalingConfig:
+            MinSize: 2
+            DesiredSize: 2
+            MaxSize: 2
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+        DependsOn: [EKSCluster, eksNodeRole]
+    
